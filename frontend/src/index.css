@@ -39,6 +39,22 @@ h1 {
   font-size: 0.9rem;
 }
 
+.stream-controls select,
+.stream-controls input {
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: white;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  outline: none;
+}
+
+.stream-controls select:focus,
+.stream-controls input:focus {
+  border-color: #00d4ff;
+}
+
 /* Video/Canvas container */
 .video-container {
   position: relative;
@@ -50,24 +66,20 @@ h1 {
   background: #000;
 }
 
-.video-container video {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  /* Mirror the video for natural interaction */
-  transform: scaleX(-1);
-}
-
+.video-container video,
+.video-container img,
 .video-container canvas {
   position: absolute;
   top: 0;
   left: 0;
   width: 100%;
   height: 100%;
-  /* Mirror the canvas to match video */
+  object-fit: cover;
+}
+
+/* Only mirror the feed when using local webcam (selfie mode) */
+.video-container.mirrored video,
+.video-container.mirrored canvas {
   transform: scaleX(-1);
 }
 

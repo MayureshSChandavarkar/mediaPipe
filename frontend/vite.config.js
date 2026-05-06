@@ -6,5 +6,12 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    proxy: {
+      '/pi-stream': {
+        target: 'http://192.168.0.102:8080',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/pi-stream/, '/stream'),
+      }
+    }
   },
 })

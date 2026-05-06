@@ -81,6 +81,7 @@ async function logPinchToBackend(coordinates) {
 function App() {
   // Refs
   const videoRef = useRef(null);
+  const imgRef = useRef(null); // For handling the Raspberry Pi MJPEG image stream
   const canvasRef = useRef(null);
   const handLandmarkerRef = useRef(null);
   const animationFrameRef = useRef(null);
@@ -88,6 +89,9 @@ function App() {
   const drawingUtilsRef = useRef(null);
 
   // State
+  const [streamMode, setStreamMode] = useState('pi'); // 'pi' or 'webcam'
+  const [piUrl, setPiUrl] = useState('/pi-stream');
+  
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [isTracking, setIsTracking] = useState(false);
@@ -103,70 +107,111 @@ function App() {
 
   const initializeHandLandmarker = useCallback(async () => {
     try {
-      console.log('Initializing MediaPipe HandLandmarker...');
+      console.log('Step 1: Loading MediaPipe WASM files...');
       
       // Initialize the vision fileset (use latest stable WASM bundle)
       const vision = await FilesetResolver.forVisionTasks(
         'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm'
       );
+      console.log('Step 2: WASM loaded, creating HandLandmarker...');
 
-      // Create the HandLandmarker
+      // Create the HandLandmarker - try CPU first for compatibility
       const handLandmarker = await HandLandmarker.createFromOptions(vision, {
         baseOptions: {
           modelAssetPath: HAND_LANDMARKER_MODEL_URL,
-          delegate: 'GPU' // Use GPU for better performance, falls back to CPU if unavailable
+          delegate: 'CPU' // Use CPU for better compatibility
         },
         runningMode: 'VIDEO',
-        numHands: 2, // Track up to 2 hands
+        numHands: 2,
         minHandDetectionConfidence: 0.5,
         minHandPresenceConfidence: 0.5,
         minTrackingConfidence: 0.5
       });
 
       handLandmarkerRef.current = handLandmarker;
-      console.log('HandLandmarker initialized successfully');
+      console.log('Step 3: HandLandmarker ready!');
       
       return handLandmarker;
     } catch (err) {
       console.error('Failed to initialize HandLandmarker:', err);
-      throw err;
+      throw new Error(`MediaPipe init failed: ${err.message}`);
     }
   }, []);
 
   // ============================================================================
-  // WEBCAM INITIALIZATION
+  // MEDIA STREAM INITIALIZATION
   // ============================================================================
 
-  const initializeWebcam = useCallback(async () => {
+  const startMediaStream = useCallback(async () => {
     try {
-      console.log('Requesting webcam access...');
-      
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-          facingMode: 'user'
+      if (streamMode === 'webcam') {
+        console.log('Step 4: Requesting webcam access...');
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error('getUserMedia not supported - try Chrome or Firefox');
         }
-      });
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
         
-        // Wait for video to be ready
-        await new Promise((resolve) => {
-          videoRef.current.onloadedmetadata = () => {
-            videoRef.current.play();
-            resolve();
-          };
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+            facingMode: 'user'
+          }
         });
+        console.log('Step 5: Camera permission granted');
 
-        console.log('Webcam initialized successfully');
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          
+          await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('Video load timeout')), 10000);
+            videoRef.current.onloadedmetadata = () => {
+              clearTimeout(timeout);
+              videoRef.current.play();
+              console.log('Step 6: Video playing!');
+              resolve();
+            };
+            videoRef.current.onerror = () => {
+              clearTimeout(timeout);
+              reject(new Error('Video element error'));
+            };
+          });
+        }
+      } else if (streamMode === 'pi') {
+        console.log(`Step 4: Connecting to Pi Stream at ${piUrl}...`);
+        
+        if (imgRef.current) {
+          // No crossOrigin needed since we are actively proxying it through Vite!
+          imgRef.current.src = piUrl;
+
+          await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+              clearInterval(checker);
+              reject(new Error('Pi Stream connection timeout. Check IP and port.'));
+            }, 10000);
+            
+            // browsers sometimes don't fire "onload" for continuous MJPEG streams, 
+            // so we constantly pole the image to see if it received its first frame!
+            const checker = setInterval(() => {
+              if (imgRef.current && imgRef.current.naturalWidth > 0) {
+                clearInterval(checker);
+                clearTimeout(timeout);
+                console.log('Step 5: Pi Stream connected!');
+                resolve();
+              }
+            }, 100);
+
+            imgRef.current.onerror = () => {
+              clearTimeout(timeout);
+              reject(new Error('Failed to connect to Pi Stream. Ensure mjpg-streamer is running on the Pi.'));
+            };
+          });
+        }
       }
     } catch (err) {
-      console.error('Failed to access webcam:', err);
-      throw new Error('Could not access webcam. Please ensure camera permissions are granted.');
+      console.error('Media stream error:', err);
+      throw new Error(`Media connection failed: ${err.message}`);
     }
-  }, []);
+  }, [streamMode, piUrl]);
 
   // ============================================================================
   // HAND TRACKING LOOP
@@ -174,20 +219,38 @@ function App() {
 
   const processFrame = useCallback(() => {
     const video = videoRef.current;
+    const img = imgRef.current;
     const canvas = canvasRef.current;
     const handLandmarker = handLandmarkerRef.current;
+    
+    // Choose active media element
+    const activeMedia = streamMode === 'webcam' ? video : img;
 
-    if (!video || !canvas || !handLandmarker || video.readyState < 2) {
+    if (!activeMedia || !canvas || !handLandmarker) {
+      animationFrameRef.current = requestAnimationFrame(processFrame);
+      return;
+    }
+
+    // Check media readiness
+    let mediaWidth = 0;
+    let mediaHeight = 0;
+    if (streamMode === 'webcam' && video.readyState >= 2) {
+      mediaWidth = video.videoWidth;
+      mediaHeight = video.videoHeight;
+    } else if (streamMode === 'pi' && img.complete && img.naturalWidth > 0) {
+      mediaWidth = img.naturalWidth;
+      mediaHeight = img.naturalHeight;
+    } else {
       animationFrameRef.current = requestAnimationFrame(processFrame);
       return;
     }
 
     const ctx = canvas.getContext('2d');
     
-    // Set canvas dimensions to match video
-    if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+    // Set canvas dimensions to match video/stream
+    if (canvas.width !== mediaWidth || canvas.height !== mediaHeight) {
+      canvas.width = mediaWidth;
+      canvas.height = mediaHeight;
     }
 
     // Clear canvas
@@ -195,7 +258,7 @@ function App() {
 
     // Detect hands in the current frame
     const startTimeMs = performance.now();
-    const results = handLandmarker.detectForVideo(video, startTimeMs);
+    const results = handLandmarker.detectForVideo(activeMedia, startTimeMs);
 
     // Update hands detected count
     setHandsDetected(results.landmarks?.length || 0);
@@ -301,7 +364,7 @@ function App() {
 
     // Continue the loop
     animationFrameRef.current = requestAnimationFrame(processFrame);
-  }, []);
+  }, [streamMode]);
 
   // ============================================================================
   // INITIALIZATION EFFECT
@@ -318,8 +381,8 @@ function App() {
         // Initialize MediaPipe HandLandmarker
         await initializeHandLandmarker();
 
-        // Initialize webcam
-        await initializeWebcam();
+        // Initialize webcam or Pi stream
+        await startMediaStream();
 
         if (isMounted) {
           setIsLoading(false);
@@ -346,10 +409,15 @@ function App() {
         cancelAnimationFrame(animationFrameRef.current);
       }
 
-      // Stop webcam
+      // Stop webcam and clear media references
       if (videoRef.current?.srcObject) {
         const tracks = videoRef.current.srcObject.getTracks();
         tracks.forEach(track => track.stop());
+        videoRef.current.srcObject = null;
+      }
+      
+      if (imgRef.current) {
+        imgRef.current.src = "";
       }
 
       // Close HandLandmarker
@@ -357,7 +425,7 @@ function App() {
         handLandmarkerRef.current.close();
       }
     };
-  }, [initializeHandLandmarker, initializeWebcam, processFrame]);
+  }, [initializeHandLandmarker, startMediaStream, processFrame]);
 
   // ============================================================================
   // RENDER
@@ -366,10 +434,33 @@ function App() {
   return (
     <div className="app-container">
       <h1>🖐️ Hand Tracking - Pinch Detection</h1>
-      <p className="subtitle">MediaPipe Tasks Vision • Security Research PoC</p>
+      <p className="subtitle">MediaPipe Tasks Vision • GoPro/Security Research PoC</p>
+
+      {/* Stream Controls */}
+      <div className="stream-controls" style={{ marginBottom: '20px', display: 'flex', gap: '10px', alignItems: 'center' }}>
+        <select 
+          value={streamMode} 
+          onChange={(e) => setStreamMode(e.target.value)}
+          disabled={isLoading}
+        >
+          <option value="webcam">Local Webcam</option>
+          <option value="pi">Raspberry Pi (GoPro Mode)</option>
+        </select>
+        
+        {streamMode === 'pi' && (
+          <input 
+            type="text" 
+            value={piUrl} 
+            onChange={(e) => setPiUrl(e.target.value)}
+            disabled={isLoading}
+            placeholder="/pi-stream"
+            style={{ width: '300px' }}
+          />
+        )}
+      </div>
 
       {/* Video/Canvas Container */}
-      <div className="video-container">
+      <div className={`video-container ${streamMode === 'webcam' ? 'mirrored' : ''}`}>
         {isLoading && (
           <div className="loading">
             <div className="spinner"></div>
@@ -380,7 +471,7 @@ function App() {
         {error && (
           <div className="error">
             <p>⚠️ {error}</p>
-            <p>Please refresh the page and grant camera permissions.</p>
+            <p>Please check your connection and refresh.</p>
           </div>
         )}
 
@@ -388,9 +479,15 @@ function App() {
           ref={videoRef}
           playsInline
           muted
-          style={{ display: isLoading || error ? 'none' : 'block' }}
+          style={{ display: isLoading || error || streamMode !== 'webcam' ? 'none' : 'block' }}
         />
         
+        <img
+          ref={imgRef}
+          alt="Pi Stream"
+          style={{ display: isLoading || error || streamMode !== 'pi' ? 'none' : 'block' }}
+        />
+
         <canvas
           ref={canvasRef}
           style={{ display: isLoading || error ? 'none' : 'block' }}

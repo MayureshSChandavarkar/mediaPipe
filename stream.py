@@ -6,7 +6,8 @@ app = Flask(__name__)
 @app.route('/stream')
 def stream():
     def generate():
-        cmd = ["rpicam-vid", "-t", "0", "--codec", "mjpeg", "--width", "640", "--height", "480", "--framerate", "30", "--inline", "-o", "-"]
+        # Using 1280x720 natively zooms the camera out because it uses the full frame of the sensor!
+        cmd = ["rpicam-vid", "-t", "0", "--codec", "mjpeg", "--width", "1280", "--height", "720", "--framerate", "30", "--inline", "-o", "-"]
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE)
         
         chunk = b''
