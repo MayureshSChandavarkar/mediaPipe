@@ -6,7 +6,7 @@ app = Flask(__name__)
 @app.route('/stream')
 def stream():
     def generate():
-        cmd = ["rpicam-vid", "-n", "-t", "0", "--codec", "mjpeg", "--width", "640", "--height", "480", "--framerate", "30", "--inline", "-o", "-"]
+        cmd = ["rpicam-vid", "-t", "0", "--codec", "mjpeg", "--width", "640", "--height", "480", "--framerate", "30", "--inline", "-o", "-"]
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE)
         
         chunk = b''
@@ -27,4 +27,3 @@ def stream():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080)
-EOF
