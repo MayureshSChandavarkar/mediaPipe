@@ -33,7 +33,7 @@ const KEYPAD_LAYOUT = [
 
 // 3D coordinates for the VR Keyboard in normalized space
 // Z represents depth (away from the camera). Positive is further away.
-const VIRTUAL_KEYPAD_Z = 1.5; // Depth of the keypad plane in 3D space
+const VIRTUAL_KEYPAD_Z = 0.4; // Moved closer to shorten the ray (was 1.5)
 const KEYPAD_3D_WIDTH = 0.5;
 const KEYPAD_3D_HEIGHT = 0.6;
 const KEYPAD_3D_START_X = 0.5 - (KEYPAD_3D_WIDTH / 2);
