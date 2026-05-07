@@ -23,9 +23,41 @@ const HAND_LANDMARKER_MODEL_URL =
 const THUMB_TIP_INDEX = 4;
 const INDEX_FINGER_TIP_INDEX = 8;
 
+// Virtual Keypad Setup
+const KEYPAD_LAYOUT = [
+  ['1', '2', '3'],
+  ['4', '5', '6'],
+  ['7', '8', '9'],
+  ['*', '0', '#']
+];
+
+// 3D coordinates for the VR Keyboard in normalized space
+// Z represents depth (away from the camera). Positive is further away.
+const VIRTUAL_KEYPAD_Z = 1.5; // Depth of the keypad plane in 3D space
+const KEYPAD_3D_WIDTH = 0.5;
+const KEYPAD_3D_HEIGHT = 0.6;
+const KEYPAD_3D_START_X = 0.5 - (KEYPAD_3D_WIDTH / 2);
+const KEYPAD_3D_START_Y = 0.5 - (KEYPAD_3D_HEIGHT / 2);
+
 // ============================================================================
 // UTILITY FUNCTIONS
 // ============================================================================
+
+/**
+ * Maps a 3D intersection point to a key on the virtual keypad.
+ * Returns the key string if pressed, or null if outside.
+ */
+function predictKeyFrom3DHit(x, y) {
+  if (x < KEYPAD_3D_START_X || x > KEYPAD_3D_START_X + KEYPAD_3D_WIDTH || y < KEYPAD_3D_START_Y || y > KEYPAD_3D_START_Y + KEYPAD_3D_HEIGHT) return null;
+  
+  const col = Math.floor((x - KEYPAD_3D_START_X) / (KEYPAD_3D_WIDTH / 3));
+  const row = Math.floor((y - KEYPAD_3D_START_Y) / (KEYPAD_3D_HEIGHT / 4));
+  
+  if (row >= 0 && row < 4 && col >= 0 && col < 3) {
+    return KEYPAD_LAYOUT[row][col];
+  }
+  return null;
+}
 
 /**
  * Calculate the 3D Euclidean distance between two landmarks
@@ -42,12 +74,14 @@ function calculate3DDistance(landmark1, landmark2) {
 
 /**
  * Send pinch event to the backend server
+ * @param {string} key - The predicted key
  * @param {Object} coordinates - The 3D coordinates {x, y, z}
  */
-async function logPinchToBackend(coordinates) {
+async function logPinchToBackend(key, coordinates) {
   try {
     const payload = {
       timestamp: new Date().toISOString(),
+      keyPredicted: key,
       coordinates: {
         x: coordinates.x,
         y: coordinates.y,
@@ -256,6 +290,63 @@ function App() {
     // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    // --- DRAW VIRTUAL SPATIAL KEYPAD IN 3D PERSPECTIVE ---
+    // Simulate a 3D perspective by mathematically projecting the keypad corners
+    // and drawing a holographic grid in the center of the screen
+    const fov = 400; // Perspective zoom
+    
+    // Project a 3D point (px, py, pz) to 2D canvas (x, y)
+    const project3D = (px, py, pz) => {
+      // Shift origin to center for perspective calculation
+      const cx = px - 0.5;
+      const cy = py - 0.5;
+      
+      const scale = fov / (fov + pz * 600);
+      return {
+        x: (cx * scale + 0.5) * canvas.width,
+        y: (cy * scale + 0.5) * canvas.height,
+        scale: scale
+      };
+    };
+
+    // Draw the keypad cells with holographic VR style
+    KEYPAD_LAYOUT.forEach((row, r) => {
+      row.forEach((key, c) => {
+        const cellW = KEYPAD_3D_WIDTH / 3;
+        const cellH = KEYPAD_3D_HEIGHT / 4;
+        
+        const cellX = KEYPAD_3D_START_X + (c * cellW);
+        const cellY = KEYPAD_3D_START_Y + (r * cellH);
+        
+        // Find 4 corners in 3D
+        const pTL = project3D(cellX, cellY, VIRTUAL_KEYPAD_Z);
+        const pTR = project3D(cellX + cellW, cellY, VIRTUAL_KEYPAD_Z);
+        const pBL = project3D(cellX, cellY + cellH, VIRTUAL_KEYPAD_Z);
+        const pBR = project3D(cellX + cellW, cellY + cellH, VIRTUAL_KEYPAD_Z);
+
+        // Draw the warped poly for this cell
+        ctx.beginPath();
+        ctx.moveTo(pTL.x, pTL.y);
+        ctx.lineTo(pTR.x, pTR.y);
+        ctx.lineTo(pBR.x, pBR.y);
+        ctx.lineTo(pBL.x, pBL.y);
+        ctx.closePath();
+        
+        ctx.strokeStyle = 'rgba(0, 212, 255, 0.4)';
+        ctx.fillStyle = 'rgba(25, 25, 35, 0.5)';
+        ctx.fill();
+        ctx.stroke();
+        
+        // Draw the text in the center
+        const center = project3D(cellX + cellW/2, cellY + cellH/2, VIRTUAL_KEYPAD_Z);
+        ctx.font = `${24 * center.scale}px monospace`;
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(key, center.x, center.y);
+      });
+    });
+
     // Detect hands in the current frame
     const startTimeMs = performance.now();
     const results = handLandmarker.detectForVideo(activeMedia, startTimeMs);
@@ -302,6 +393,48 @@ function App() {
         ctx.fillStyle = '#00BFFF';
         ctx.fill();
 
+        // Calculate ray from WRIST (0) to INDEX_FINGER_TIP (8) in 3D
+        const wrist = landmarks[0];
+        const dx = indexTip.x - wrist.x;
+        const dy = indexTip.y - wrist.y;
+        // In MediaPipe normalized landmarks, z is pseudo-depth (roughly proportional to width)
+        const dz = indexTip.z - wrist.z;
+        
+        // Ray equation: HandStart + t * Direction = PointOnPlane
+        // We know the plane is at Z = VIRTUAL_KEYPAD_Z.
+        // We want to find 't' where: wrist.z + t * dz = VIRTUAL_KEYPAD_Z
+        // If dz is 0, line is parallel to plane.
+        let hitX = null, hitY = null, pCursor = null;
+        
+        if (Math.abs(dz) > 0.0001) {
+          const t = (VIRTUAL_KEYPAD_Z - wrist.z) / dz;
+          
+          // Only render intersect if pointing forward (t > 0)
+          if (t > 0) {
+            hitX = wrist.x + t * dx;
+            hitY = wrist.y + t * dy;
+            
+            // Project the 3D hit point back to the 2D canvas 
+            pCursor = project3D(hitX, hitY, VIRTUAL_KEYPAD_Z);
+            
+            // Draw the laser beam from index tip to the 3D plane
+            ctx.beginPath();
+            ctx.moveTo(indexTip.x * canvas.width, indexTip.y * canvas.height);
+            ctx.lineTo(pCursor.x, pCursor.y);
+            ctx.strokeStyle = 'rgba(0, 255, 0, 0.7)';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 5]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Draw laser cursor pointer on the HUD
+            ctx.beginPath();
+            ctx.arc(pCursor.x, pCursor.y, 6 * pCursor.scale, 0, 2*Math.PI);
+            ctx.fillStyle = '#00FF00';
+            ctx.fill();
+          }
+        }
+
         // Calculate distance between thumb and index finger
         // Use world landmarks (3D) if available, otherwise use normalized landmarks
         const thumbLandmark = worldLandmarks ? worldLandmarks[THUMB_TIP_INDEX] : thumbTip;
@@ -328,8 +461,20 @@ function App() {
           ctx.lineWidth = 4;
           ctx.stroke();
 
+          // We check the 3D intersection of the laser against the keypad plane!
+          let pressedKey = null;
+          if (hitX !== null && hitY !== null && pCursor !== null) {
+            pressedKey = predictKeyFrom3DHit(hitX, hitY);
+
+            // Draw 3D visual ping at laser hit location on the plane
+            ctx.beginPath();
+            ctx.arc(pCursor.x, pCursor.y, 25 * pCursor.scale, 0, 2*Math.PI);
+            ctx.fillStyle = 'rgba(255, 215, 0, 0.8)';
+            ctx.fill();
+          }
+
           // Log to backend with index finger coordinates
-          const logPayload = logPinchToBackend({
+          const logPayload = logPinchToBackend(pressedKey || 'MISS', {
             x: indexLandmark.x,
             y: indexLandmark.y,
             z: indexLandmark.z
@@ -338,7 +483,7 @@ function App() {
           logPayload.then(payload => {
             if (payload) {
               setRecentLogs(prev => [
-                `[${new Date().toLocaleTimeString()}] Pinch @ (${payload.coordinates.x.toFixed(4)}, ${payload.coordinates.y.toFixed(4)}, ${payload.coordinates.z.toFixed(4)})`,
+                `[${new Date().toLocaleTimeString()}] Typed [${payload.keyPredicted}] @ (${payload.coordinates.x.toFixed(4)}, ${payload.coordinates.y.toFixed(4)}, ${payload.coordinates.z.toFixed(4)})`,
                 ...prev.slice(0, 9) // Keep last 10 logs
               ]);
             }
