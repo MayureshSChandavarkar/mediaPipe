@@ -134,6 +134,7 @@ function App() {
   const [pinchCount, setPinchCount] = useState(0);
   const [recentLogs, setRecentLogs] = useState([]);
   const [handsDetected, setHandsDetected] = useState(0);
+  const [lastPinchedKey, setLastPinchedKey] = useState(null);
 
   // ============================================================================
   // MEDIAPIPE INITIALIZATION
@@ -471,6 +472,8 @@ function App() {
             ctx.arc(pCursor.x, pCursor.y, 25 * pCursor.scale, 0, 2*Math.PI);
             ctx.fillStyle = 'rgba(255, 215, 0, 0.8)';
             ctx.fill();
+
+            setLastPinchedKey(pressedKey || 'MISS');
           }
 
           // Log to backend with index finger coordinates
@@ -641,6 +644,40 @@ function App() {
         {isPinching && (
           <div className="pinch-indicator">✨ PINCH DETECTED!</div>
         )}
+
+        <div className="last-pinched-keypad" style={{
+          position: 'absolute',
+          top: '20px',
+          right: '20px',
+          backgroundColor: 'rgba(25, 25, 35, 0.8)',
+          padding: '15px',
+          borderRadius: '10px',
+          border: '2px solid rgba(0, 212, 255, 0.5)',
+          zIndex: 10,
+          display: 'grid',
+          gridTemplateColumns: 'repeat(3, 1fr)',
+          gap: '10px'
+        }}>
+          {KEYPAD_LAYOUT.flat().map((key) => (
+            <div key={key} style={{
+              width: '50px',
+              height: '50px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '24px',
+              fontWeight: 'bold',
+              borderRadius: '8px',
+              backgroundColor: lastPinchedKey === key ? 'rgba(255, 215, 0, 0.8)' : 'rgba(255, 255, 255, 0.1)',
+              color: lastPinchedKey === key ? '#000' : '#FFF',
+              border: lastPinchedKey === key ? '2px solid #FFD700' : '1px solid rgba(255, 255, 255, 0.2)',
+              transition: 'all 0.2s ease',
+              boxShadow: lastPinchedKey === key ? '0 0 15px rgba(255, 215, 0, 0.6)' : 'none'
+            }}>
+              {key}
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Status Panel */}
