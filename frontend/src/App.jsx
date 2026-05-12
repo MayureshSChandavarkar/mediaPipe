@@ -310,44 +310,6 @@ function App() {
       };
     };
 
-    // Draw the keypad cells with holographic VR style
-    KEYPAD_LAYOUT.forEach((row, r) => {
-      row.forEach((key, c) => {
-        const cellW = KEYPAD_3D_WIDTH / 3;
-        const cellH = KEYPAD_3D_HEIGHT / 4;
-        
-        const cellX = KEYPAD_3D_START_X + (c * cellW);
-        const cellY = KEYPAD_3D_START_Y + (r * cellH);
-        
-        // Find 4 corners in 3D
-        const pTL = project3D(cellX, cellY, VIRTUAL_KEYPAD_Z);
-        const pTR = project3D(cellX + cellW, cellY, VIRTUAL_KEYPAD_Z);
-        const pBL = project3D(cellX, cellY + cellH, VIRTUAL_KEYPAD_Z);
-        const pBR = project3D(cellX + cellW, cellY + cellH, VIRTUAL_KEYPAD_Z);
-
-        // Draw the warped poly for this cell
-        ctx.beginPath();
-        ctx.moveTo(pTL.x, pTL.y);
-        ctx.lineTo(pTR.x, pTR.y);
-        ctx.lineTo(pBR.x, pBR.y);
-        ctx.lineTo(pBL.x, pBL.y);
-        ctx.closePath();
-        
-        ctx.strokeStyle = 'rgba(0, 212, 255, 0.4)';
-        ctx.fillStyle = 'rgba(25, 25, 35, 0.5)';
-        ctx.fill();
-        ctx.stroke();
-        
-        // Draw the text in the center
-        const center = project3D(cellX + cellW/2, cellY + cellH/2, VIRTUAL_KEYPAD_Z);
-        ctx.font = `${24 * center.scale}px monospace`;
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(key, center.x, center.y);
-      });
-    });
-
     // Detect hands in the current frame
     const startTimeMs = performance.now();
     const results = handLandmarker.detectForVideo(activeMedia, startTimeMs);
@@ -464,17 +426,23 @@ function App() {
 
           // We check the 3D intersection of the laser against the keypad plane!
           let pressedKey = null;
-          if (hitX !== null && hitY !== null && pCursor !== null) {
-            pressedKey = predictKeyFrom3DHit(hitX, hitY);
+          
+          // Use the index finger's actual X and Y position to predict the key
+          // Assuming the keypad is physically in front of them
+          pressedKey = predictKeyFrom3DHit(indexTip.x, indexTip.y);
 
-            // Draw 3D visual ping at laser hit location on the plane
+          if (pressedKey) {
+            // Project the 3D point of their finger to screen to draw the ping
+            const hitVisual = project3D(indexTip.x, indexTip.y, VIRTUAL_KEYPAD_Z);
+            
+            // Draw 3D visual ping at pinch location on the plane
             ctx.beginPath();
-            ctx.arc(pCursor.x, pCursor.y, 25 * pCursor.scale, 0, 2*Math.PI);
+            ctx.arc(hitVisual.x, hitVisual.y, 25 * hitVisual.scale, 0, 2*Math.PI);
             ctx.fillStyle = 'rgba(255, 215, 0, 0.8)';
             ctx.fill();
-
-            setLastPinchedKey(pressedKey || 'MISS');
           }
+
+          setLastPinchedKey(pressedKey || 'MISS');
 
           // Log to backend with index finger coordinates
           const logPayload = logPinchToBackend(pressedKey || 'MISS', {
